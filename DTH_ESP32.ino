@@ -10,23 +10,26 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include "Arduino.h"
+
+
+
+#include "WiFi.h"
+#include "driver/adc.h"
+#include <esp_wifi.h>
+#include <esp_bt.h>
+// How many minutes the ESP should sleep
+#define DEEP_SLEEP_TIME 5
+
 //
 const char* ssid = "TeleCentro-8bd5";
 const char* password = "*********";
-
 String serverName = "http://home-sensordata.herokuapp.com/temperaturas";
 
-/**************************************************************/
-/* Example how to read DHT sensors from an ESP32 using multi- */
-/* tasking.                                                   */
-/* This example depends on the Ticker library to wake up      */
-/* the task every 20 seconds                                  */
-/**************************************************************/
 
 DHTesp dht;
 
 void tempTask(void *pvParameters);
-bool getTemperature();
+String getTemperature();
 void triggerGetTemp();
 
 /** Task handle for the light value read task */
@@ -40,156 +43,32 @@ bool tasksEnabled = false;
 /** Pin number for DHT11 data pin */
 int dhtPin = 14;
 //time in between readings
-int cooldown =  30;
-/**
-   initTemp
-   Setup DHT library
-   Setup task and timer for repeated measurement
-   @return bool
-      true if task and timer are started
-      false if task or timer couldn't be started
-*/
-bool initTemp() {
+int cooldown =  60; //10 minutes
+
+
+void initTemp() {
   byte resultValue = 0;
   // Initialize temperature sensor
   dht.setup(dhtPin, DHTesp::DHT11);
   Serial.println("DHT initiated");
 
-  // Start task to get temperature
-  xTaskCreatePinnedToCore(
-    tempTask,                       /* Function to implement the task */
-    "tempTask ",                    /* Name of the task */
-    4000,                           /* Stack size in words */
-    NULL,                           /* Task input parameter */
-    5,                              /* Priority of the task */
-    &tempTaskHandle,                /* Task handle. */
-    1);                             /* Core where the task should run */
-
-  if (tempTaskHandle == NULL) {
-    Serial.println("Failed to start task for temperature update");
-    return false;
-  } else {
-    // Start update of environment data every 20 seconds
-    tempTicker.attach(cooldown, triggerGetTemp);
-  }
-  return true;
 }
 
-/**
-   triggerGetTemp
-   Sets flag dhtUpdated to true for handling in loop()
-   called by Ticker getTempTimer
-*/
-void triggerGetTemp() {
-  if (tempTaskHandle != NULL) {
-    xTaskResumeFromISR(tempTaskHandle);
-  }
-}
 
-/**
-   Task to reads temperature from DHT11 sensor
-   @param pvParameters
-      pointer to task parameters
-*/
-void tempTask(void *pvParameters) {
-  Serial.println("tempTask loop started");
-  while (1) // tempTask loop
-  {
-    if (tasksEnabled) {
-      // Get temperature values
-      getTemperature();
-    }
-    // Got sleep again
-    vTaskSuspend(NULL);
-  }
-}
 
-/**
-   getTemperature
-   Reads temperature from DHT11 sensor
-   @return bool
-      true if temperature could be aquired
-      false if aquisition failed
-*/
-bool getTemperature() {
+
+String getTemperature() {
   // Reading temperature for humidity takes about 250 milliseconds!
   // Sensor readings may also be up to 2 seconds 'old' (it's a very slow sensor)
   TempAndHumidity newValues = dht.getTempAndHumidity();
-  // Check if any reads failed and exit early (to try again).
-  if (dht.getStatus() != 0) {
-    Serial.println("DHT11 error status: " + String(dht.getStatusString()));
-    return false;
-  }
 
-  float heatIndex = dht.computeHeatIndex(newValues.temperature, newValues.humidity);
-  float dewPoint = dht.computeDewPoint(newValues.temperature, newValues.humidity);
-  float cr = dht.getComfortRatio(cf, newValues.temperature, newValues.humidity);
-
-  String comfortStatus;
-  switch (cf) {
-    case Comfort_OK:
-      comfortStatus = "Comfort_OK";
-      break;
-    case Comfort_TooHot:
-      comfortStatus = "Comfort_TooHot";
-      break;
-    case Comfort_TooCold:
-      comfortStatus = "Comfort_TooCold";
-      break;
-    case Comfort_TooDry:
-      comfortStatus = "Comfort_TooDry";
-      break;
-    case Comfort_TooHumid:
-      comfortStatus = "Comfort_TooHumid";
-      break;
-    case Comfort_HotAndHumid:
-      comfortStatus = "Comfort_HotAndHumid";
-      break;
-    case Comfort_HotAndDry:
-      comfortStatus = "Comfort_HotAndDry";
-      break;
-    case Comfort_ColdAndHumid:
-      comfortStatus = "Comfort_ColdAndHumid";
-      break;
-    case Comfort_ColdAndDry:
-      comfortStatus = "Comfort_ColdAndDry";
-      break;
-    default:
-      comfortStatus = "Unknown:";
-      break;
-  };
-
-  //Serial.println(" T:" + String(newValues.temperature) + " H:" + String(newValues.humidity) + " I:" + String(heatIndex) + " D:" + String(dewPoint) + " " + comfortStatus);
-  Serial.println(" T:" + String(newValues.temperature) + " H:" + String(newValues.humidity) + " I:" + String(heatIndex) + " " + comfortStatus);
-
-  
-  if (WiFi.status() == WL_CONNECTED) {
-    WiFiClient client;
-    HTTPClient http;
-
-    // Your Domain name with URL path or IP address with path
-    http.begin(client, serverName);
-
-    http.addHeader("Content-Type", "application/json");
-    int httpResponseCode = http.POST(String(newValues.temperature));
+  return  String(newValues.temperature);
 
 
-
-
-    Serial.print("HTTP Response code: ");
-    Serial.println(httpResponseCode);
-
-    // Free resources
-    http.end();
-
-  }
-
-
-  return true;
 }
 
-void changeCPUClock(int freq){
-   while (!Serial) { //wait to initialize
+void changeCPUClock(int freq) {
+  while (!Serial) { //wait to initialize
     delay(500);
   }
 
@@ -202,7 +81,7 @@ void changeCPUClock(int freq){
   Serial.println(getCpuFrequencyMhz());
 }
 
-void initWIFI(){
+void initWIFI() {
   //wifi
   delay(10);
 
@@ -226,14 +105,57 @@ void initWIFI(){
   Serial.println(WiFi.localIP());
 }
 
-void setup()
-{
+
+void dispatchTemperature(String temperatura) {
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFiClient client;
+    HTTPClient http;
+
+    // Your Domain name with URL path or IP address with path
+    http.begin(client, serverName);
+
+    http.addHeader("Content-Type", "application/json");
+    int httpResponseCode = http.POST(temperatura);
+
+
+
+
+    Serial.print("HTTP Response code: ");
+    Serial.println(httpResponseCode);
+
+    // Free resources
+    http.end();
+  }
+}
+
+
+void goToSleep() {
+  Serial.println("Going to sleep...");
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  btStop();
+
+  adc_power_off();
+  esp_wifi_stop();
+  esp_bt_controller_disable();
+
+  // Configure the timer to wake us up!
+  esp_sleep_enable_timer_wakeup(DEEP_SLEEP_TIME * 60L * 1000000L);
+
+  // Go to sleep! Zzzz
+  esp_deep_sleep_start();
+}
+
+void setup() {
   Serial.begin(115200);
 
-  changeCPUClock(80);
+ // changeCPUClock(80);
 
+  Serial.print("CPU Freq: ");
+  Serial.println(getCpuFrequencyMhz());
+  
   initWIFI();
-   
+
   //sensor temp
   Serial.println("Timer set to 5 seconds (timerDelay variable), it will take 5 seconds before publishing the first reading.");
   Serial.println("DHT ESP32 example with tasks");
@@ -245,17 +167,16 @@ void setup()
 
 void loop() {
 
-  if (!tasksEnabled) {
-    // Wait 2 seconds to let system settle down
-    delay(2000);
-    // Enable task that will read values from the DHT sensor
-    tasksEnabled = true;
-    if (tempTaskHandle != NULL) {
-      vTaskResume(tempTaskHandle);
-    }
+  delay(2000);
 
-  }
+  Serial.println("woke up");
+  String temperaturaMedicion = getTemperature();
+  Serial.println("temp: " + temperaturaMedicion );
+  dispatchTemperature(temperaturaMedicion);
+  goToSleep();
 
-
+ 
   yield();
+
 }
+
